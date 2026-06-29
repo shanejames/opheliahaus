@@ -216,12 +216,15 @@
   .form{display:flex;flex-direction:column;gap:18px;border:1px solid var(--ink);padding:clamp(24px,2.6vw,38px)}
   .field{display:flex;flex-direction:column;gap:7px}
   .field label{font-family:"Jost",sans-serif;font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;color:var(--smoke)}
-  .field input,.field textarea{
+  .field input,.field textarea,.field select{
     font-family:"Jost",sans-serif;font-size:1rem;color:var(--ink);
     background:var(--paper);border:1px solid var(--hair);padding:.85em .9em;width:100%;transition:border-color .25s var(--ease);
   }
-  .field input:focus,.field textarea:focus{outline:none;border-color:var(--ink)}
+  .field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--ink)}
   .field textarea{resize:vertical;min-height:120px}
+  .field select{appearance:none;-webkit-appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--ink) 50%),linear-gradient(135deg,var(--ink) 50%,transparent 50%);background-position:calc(100% - 18px) center,calc(100% - 13px) center;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+  .form-note{font-family:"Jost",sans-serif;font-size:.86rem;line-height:1.5;color:var(--smoke);min-height:0}
+  .form-note:empty{display:none}
 
   /* ---------- FOOTER ---------- */
   .foot{background:var(--ink);color:var(--paper);padding-block:clamp(56px,8vh,90px)}
@@ -513,7 +516,7 @@
             </div>
           </div>
 
-          <div class="form" data-reveal>
+          <div class="form" id="leadForm" data-reveal>
             <div class="field">
               <label for="f-name">Your name</label>
               <input id="f-name" type="text" autocomplete="name" placeholder="Jane Doe">
@@ -523,13 +526,30 @@
               <input id="f-email" type="email" autocomplete="email" placeholder="you@brand.com">
             </div>
             <div class="field">
+              <label for="f-phone">Phone (optional)</label>
+              <input id="f-phone" type="tel" autocomplete="tel" placeholder="(813) 555-0100">
+            </div>
+            <div class="field">
               <label for="f-handle">Instagram handle (optional)</label>
               <input id="f-handle" type="text" placeholder="@yourbrand">
+            </div>
+            <div class="field">
+              <label for="f-service">What are you interested in?</label>
+              <select id="f-service">
+                <option value="Not sure yet">I'm not sure yet</option>
+                <option value="The Starter">The Starter</option>
+                <option value="Signature">Signature</option>
+                <option value="The Full Haus">The Full Haus</option>
+              </select>
             </div>
             <div class="field">
               <label for="f-msg">What do you need?</label>
               <textarea id="f-msg" placeholder="A quick line about your brand and your goals."></textarea>
             </div>
+            <!-- Anti-spam honeypots. Real visitors never see or fill these. -->
+            <input id="hp_a" name="hp_field_a" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none">
+            <input id="hp_b" name="hp_field_b" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none">
+            <p class="form-note" id="formNote" role="status"></p>
             <button class="btn" id="send" type="button">Send it over</button>
           </div>
         </div>
@@ -610,21 +630,84 @@
     items.forEach(function(el){ io.observe(el); });
   }
 
-  /* contact form -> opens email (no backend needed) */
-  document.getElementById('send').addEventListener('click', function(){
-    var name = document.getElementById('f-name').value.trim();
-    var email = document.getElementById('f-email').value.trim();
-    var handle = document.getElementById('f-handle').value.trim();
-    var msg = document.getElementById('f-msg').value.trim();
-    var subject = encodeURIComponent('New project inquiry' + (name ? ' from ' + name : ''));
-    var body = encodeURIComponent(
-      'Name: ' + name + '\n' +
-      'Email: ' + email + '\n' +
-      'Instagram: ' + handle + '\n\n' +
-      msg
-    );
-    window.location.href = 'mailto:info@opheliahouse.com?subject=' + subject + '&body=' + body;
-  });
+  /* Contact form: posts the lead into the Ophelia Haus pipeline on Avolv,
+     locked to the Ophelia Haus business id, then sends the visitor to the
+     thank-you page. Identifier is the tenant id so it can never resolve to
+     another business. */
+  (function () {
+    var OPHELIA_HAUS_BUSINESS_ID = 'cmqzttotc001y30a8xvfr7412';
+    var ENDPOINT = 'https://api.avolv.ai/api/marketing/lead-ingestion?business=' + OPHELIA_HAUS_BUSINESS_ID;
+
+    var btn = document.getElementById('send');
+    var note = document.getElementById('formNote');
+    var val = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+
+    btn.addEventListener('click', function () {
+      // Silent spam guard: if a bot filled a hidden field, look successful and stop.
+      if (val('hp_a') || val('hp_b')) { window.location.href = 'thank-you.html'; return; }
+
+      var name = val('f-name');
+      var email = val('f-email');
+      var phone = val('f-phone');
+      var handle = val('f-handle');
+      var service = val('f-service');
+      var msg = val('f-msg');
+
+      // Require a name and a valid email.
+      if (!name || !email || email.indexOf('@') === -1) {
+        ['f-name', 'f-email'].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el && (!el.value.trim() || (id === 'f-email' && el.value.indexOf('@') === -1))) el.style.borderColor = '#b23a48';
+        });
+        note.textContent = 'Please add your name and a valid email so we can reach you.';
+        note.style.color = '#b23a48';
+        return;
+      }
+
+      var parts = name.split(/\s+/);
+      var firstName = parts.shift();
+      var lastName = parts.join(' ');
+
+      var details =
+        'Instagram: ' + (handle || 'Not provided') + '\n' +
+        'Interested in: ' + service + '\n\n' +
+        'Message: ' + (msg || 'No additional notes.');
+
+      var payload = {
+        firstName: firstName,
+        lastName: lastName,
+        name: name,
+        email: email,
+        phone: phone,
+        serviceType: service,
+        service: service,
+        message: details,
+        source: 'Ophelia Haus website',
+        business: OPHELIA_HAUS_BUSINESS_ID,
+        hp_field_a: '',
+        hp_field_b: ''
+      };
+
+      var label = btn.textContent;
+      btn.textContent = 'Sending...';
+      btn.disabled = true;
+      note.textContent = '';
+
+      fetch(ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(function (res) {
+        if (!res.ok) throw new Error('Status ' + res.status);
+        window.location.href = 'thank-you.html';
+      }).catch(function () {
+        btn.textContent = label;
+        btn.disabled = false;
+        note.textContent = 'That did not send just now. Please email info@opheliahouse.com or call (813) 336-7691 and we will jump on it.';
+        note.style.color = '#b23a48';
+      });
+    });
+  })();
 </script>
 </body>
 </html>
